@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>หน้าจอหลักสำหรับผู้ดำเนินรายการ | SSO Quiz Game Host</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Paho MQTT WebSockets Client -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <!-- QRCode.js CDN for dynamic QR code generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <!-- Password Lock Overlay -->
+  <div id="password-overlay" class="password-overlay">
+    <div class="glass-panel password-card">
+      <h2 style="font-size: 1.6rem; margin-bottom: 15px; background: linear-gradient(135deg, #a78bfa 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+        รหัสผ่านผู้ดำเนินรายการ
+      </h2>
+      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 25px;">
+        กรุณากรอกรหัสผ่านเพื่อเข้าใช้งานหน้านี้
+      </p>
+      <div id="pass-error" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #fc8181; padding: 10px; border-radius: 8px; margin-bottom: 20px; font-size: 0.85rem; display: none;">
+        รหัสผ่านไม่ถูกต้อง!
+      </div>
+      <form onsubmit="checkPassword(event)">
+        <div class="form-group">
+          <input type="password" id="input-password" class="form-control" placeholder="ระบุรหัสผ่าน" required autocomplete="new-password" style="text-align: center; font-size: 1.2rem; letter-spacing: 2px;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 1rem; margin-top: 10px;">
+          เข้าสู่ระบบ
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="logo">SSO Quiz Game <span>Host Panel (Serverless)</span></div>
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <span id="connection-status" class="badge badge-red" style="font-size: 0.9rem; padding: 6px 12px;">กำลังเชื่อมต่อระบบส่งข้อมูล...</span>
+      <a href="admin.html" id="nav-admin" class="btn btn-secondary">
+        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        จัดการคำถาม
+      </a>
+      <button onclick="resetGame()" class="btn btn-danger">รีเซ็ตเกม</button>
+    </div>
+  </header>
+
+  <main class="container">
+    
+    <!-- State: Lobby -->
+    <div id="state-lobby" class="lobby-layout" style="display: none;">
+      <section class="glass-panel lobby-info">
+        <h2 style="font-size: 1.5rem; color: var(--text-muted);">เข้าเล่นเกมได้ที่นี่</h2>
+        <div class="game-pin-box">
+          <div class="game-pin-title">GAME PIN</div>
+          <div class="game-pin-value" id="lobby-pin">------</div>
+        </div>
+        <p style="margin: 10px 0 20px 0; line-height: 1.5; color: var(--text-muted);">
+          สแกน QR Code หรือเข้าเว็บบนมือถือ:<br>
+          <strong id="lobby-url" style="color: white; font-family: 'Outfit';">http://.../</strong>
+        </p>
+        <div class="qr-container">
+          <div id="qrcode"></div>
+        </div>
+      </section>
+
+      <section class="glass-panel lobby-players-box">
+        <div class="lobby-players-header">
+          <h2 style="font-size: 1.4rem;">ผู้เล่นในห้อง</h2>
+          <div class="players-count"><span id="lobby-players-count">0</span> คน</div>
+        </div>
+        <div class="players-grid" id="lobby-players-grid">
+          <!-- Joined players tags will render here -->
+        </div>
+        <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+          <button onclick="startGame()" class="btn btn-primary" id="start-game-btn" disabled style="padding: 15px 40px; font-size: 1.2rem;">
+            เริ่มเกมเดี๋ยวนี้!
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- State: Active Question -->
+    <div id="state-question" class="host-question-layout" style="display: none;">
+      <div class="question-header">
+        <div class="question-number">คำถามข้อที่ <span id="q-index-val">0</span></div>
+        <div class="question-text" id="q-text-val">กำลังโหลดคำถาม...</div>
+      </div>
+
+      <div class="question-middle">
+        <!-- Circular Timer -->
+        <div class="timer-container">
+          <div class="timer-circle" id="timer-circle-element">
+            <span class="timer-value" id="timer-sec-val">20</span>
+            <span class="timer-label">วินาที</span>
+          </div>
+        </div>
+
+        <!-- Answers Bar Chart -->
+        <div class="chart-container" id="answers-chart" style="visibility: hidden;">
+          <div class="chart-bar-wrapper">
+            <div class="chart-bar red" id="chart-bar-0" style="height: 10px;">
+              <span class="chart-bar-val" id="chart-val-0">0</span>
+            </div>
+            <div class="chart-bar-icon" style="background-color: var(--color-red);">▲</div>
+          </div>
+          <div class="chart-bar-wrapper">
+            <div class="chart-bar blue" id="chart-bar-1" style="height: 10px;">
+              <span class="chart-bar-val" id="chart-val-1">0</span>
+            </div>
+            <div class="chart-bar-icon" style="background-color: var(--color-blue);">◆</div>
+          </div>
+          <div class="chart-bar-wrapper">
+            <div class="chart-bar yellow" id="chart-bar-2" style="height: 10px;">
+              <span class="chart-bar-val" id="chart-val-2">0</span>
+            </div>
+            <div class="chart-bar-icon" style="background-color: var(--color-yellow);">●</div>
+          </div>
+          <div class="chart-bar-wrapper">
+            <div class="chart-bar green" id="chart-bar-3" style="height: 10px;">
+              <span class="chart-bar-val" id="chart-val-3">0</span>
+            </div>
+            <div class="chart-bar-icon" style="background-color: var(--color-green);">■</div>
+          </div>
+        </div>
+
+        <!-- Answers Count indicator -->
+        <div class="answers-submitted-box">
+          <span class="answers-count-val" id="q-answers-submitted">0</span>
+          <span class="answers-count-label">คำตอบแล้ว</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">ผู้เล่นทั้งหมด <span id="q-total-players">0</span> คน</span>
+        </div>
+      </div>
+
+      <!-- Question Choices Detail -->
+      <div class="host-choices-grid">
+        <div class="host-choice-card red" id="choice-card-0">
+          <div class="choice-shape">▲</div>
+          <div id="choice-text-0">ตัวเลือกที่ 1</div>
+        </div>
+        <div class="host-choice-card blue" id="choice-card-1">
+          <div class="choice-shape">◆</div>
+          <div id="choice-text-1">ตัวเลือกที่ 2</div>
+        </div>
+        <div class="host-choice-card yellow" id="choice-card-2">
+          <div class="choice-shape">●</div>
+          <div id="choice-text-2">ตัวเลือกที่ 3</div>
+        </div>
+        <div class="host-choice-card green" id="choice-card-3">
+          <div class="choice-shape">■</div>
+          <div id="choice-text-3">ตัวเลือกที่ 4</div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 15px; margin-top: 10px;">
+        <button id="skip-btn" onclick="revealAnswer()" class="btn btn-secondary">ข้ามข้อนี้ (Skip)</button>
+        <button id="next-btn" onclick="showLeaderboard()" class="btn btn-primary" style="display: none; padding: 12px 30px;">
+          ถัดไป
+          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- State: Leaderboard -->
+    <div id="state-leaderboard" class="leaderboard-container glass-panel" style="display: none;">
+      <h2 class="leaderboard-title">อันดับคะแนน (Top 10)</h2>
+      <div class="leaderboard-list" id="leaderboard-list-grid">
+        <!-- Leaderboard items will render here dynamically -->
+      </div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 30px;">
+        <button onclick="nextQuestion()" id="leaderboard-next-btn" class="btn btn-primary" style="padding: 14px 40px; font-size: 1.1rem;">
+          ข้อถัดไป
+          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- State: Podium (Game Over) -->
+    <div id="state-podium" class="podium-outer-container" style="display: none;">
+      <h2 style="font-size: 2.5rem; text-align: center; font-weight: 800; background: linear-gradient(135deg, #a78bfa 0%, #f59e0b 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+        🎉 ขอแสดงความยินดีกับผู้ชนะ 3 อันดับแรก! 🎉
+      </h2>
+      
+      <div class="podium-container">
+        <!-- 3rd Place -->
+        <div class="podium-column third" id="podium-3rd">
+          <div class="podium-avatar">🥉</div>
+          <div class="podium-player-name" id="podium-name-3">ไม่มีผู้เล่น</div>
+          <div class="podium-player-score" id="podium-score-3">0 คะแนน</div>
+          <div class="podium-pedestal">
+            <span class="podium-rank-num">3</span>
+          </div>
+        </div>
+
+        <!-- 1st Place -->
+        <div class="podium-column first" id="podium-1st">
+          <div class="podium-avatar">👑</div>
+          <div class="podium-player-name" id="podium-name-1">ไม่มีผู้เล่น</div>
+          <div class="podium-player-score" id="podium-score-1">0 คะแนน</div>
+          <div class="podium-pedestal">
+            <span class="podium-rank-num">1</span>
+          </div>
+        </div>
+
+        <!-- 2nd Place -->
+        <div class="podium-column second" id="podium-2nd">
+          <div class="podium-avatar">🥈</div>
+          <div class="podium-player-name" id="podium-name-2">ไม่มีผู้เล่น</div>
+          <div class="podium-player-score" id="podium-score-2">0 คะแนน</div>
+          <div class="podium-pedestal">
+            <span class="podium-rank-num">2</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 50px; display: flex; gap: 15px;">
+        <button onclick="resetGame()" class="btn btn-primary" style="padding: 15px 40px; font-size: 1.1rem;">เล่นอีกครั้ง</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Confetti Container -->
+  <div id="confetti-container" style="position: fixed; inset: 0; pointer-events: none; z-index: 9999;"></div>
+
+  <script>
+    // Game variables
+    let gamePin = "";
+    let questions = [];
+    
+    // In-memory host game state
+    let gameState = {
+      status: "lobby", // lobby, question, reveal, leaderboard, podium
+      currentQuestionIndex: -1,
+      players: {}, // nickname -> playerObject
+      choiceCounts: [0, 0, 0, 0],
+      answersCount: 0,
+      timeRemaining: 20,
+      questionStartTime: 0
+    };
+
+    const defaultQuestions = [
+      {
+        "id": 1,
+        "text": "ผู้ประกันตนมาตรา 33 (ม.33) หมายถึงกลุ่มบุคคลในข้อใด?",
+        "options": [
+          "พนักงานบริษัทเอกชนทั่วไปที่มีนายจ้าง",
+          "ผู้ที่เคยเป็น ม.33 แล้วลาออกมาส่งเงินสมทบต่อเอง",
+          "ผู้ประกอบอาชีพอิสระหรือฟรีแลนซ์",
+          "ข้าราชการและพนักงานรัฐวิสาหกิจ"
+        ],
+        "answerIndex": 0,
+        "timeLimit": 20
+      },
+      {
+        "id": 2,
+        "text": "สิทธิประโยชน์กรณีคลอดบุตร ผู้ประกันตนชาย (ม.33/ม.39) สามารถเบิกค่าคลอดบุตรของภรรยาได้ครั้งละกี่บาท?",
+        "options": [
+          "10,000 บาท",
+          "12,000 บาท",
+          "15,000 บาท",
+          "20,000 บาท"
+        ],
+        "answerIndex": 2,
+        "timeLimit": 20
+      },
+      {
+        "id": 3,
+        "text": "เงินสงเคราะห์บุตร ประกันสังคมจ่ายให้เดือนละกี่บาทต่อบุตร 1 คน (อายุไม่เกิน 6 ปีบริบูรณ์ จำกัดไม่เกิน 3 คน)?",
+        "options": [
+          "600 บาท",
+          "800 บาท",
+          "1,000 บาท",
+          "1,200 บาท"
+        ],
+        "answerIndex": 1,
+        "timeLimit": 20
+      },
+      {
+        "id": 4,
+        "text": "ผู้ประกันตนต้องส่งเงินสมทบอย่างน้อยกี่เดือน ภายใน 15 เดือนก่อนเดือนที่รับบริการทางการแพทย์ จึงจะได้รับสิทธิเจ็บป่วย?",
+        "options": [
+          "1 เดือน",
+          "3 เดือน",
+          "6 เดือน",
+          "12 เดือน"
+        ],
+        "answerIndex": 1,
+        "timeLimit": 20
+      },
+      {
+        "id": 5,
+        "text": "หากผู้ประกันตน ม.33 ลาออกจากงานเอง (ลาออกสมัครใจ) จะได้รับเงินชดเชยกรณีว่างงานในอัตราใด?",
+        "options": [
+          "30% ของค่าจ้างเฉลี่ย ไม่เกิน 90 วัน",
+          "50% ของค่าจ้างเฉลี่ย ไม่เกิน 180 วัน",
+          "45% ของค่าจ้างเฉลี่ย ไม่เกิน 90 วัน",
+          "ไม่สามารถขอรับเงินชดเชยกรณีว่างงานได้"
+        ],
+        "answerIndex": 0,
+        "timeLimit": 20
+      },
+      {
+        "id": 6,
+        "text": "หากผู้ประกันตน ม.33 ถูกเลิกจ้าง (ไม่ใช่ลาออกเอง) จะได้รับเงินชดเชยกรณีว่างงานในอัตราใด?",
+        "options": [
+          "30% ของค่าจ้างเฉลี่ย ไม่เกิน 90 วัน",
+          "50% ของค่าจ้างเฉลี่ย ไม่เกิน 180 วัน",
+          "70% ของค่าจ้างเฉลี่ย ไม่เกิน 200 วัน",
+          "100% ของค่าจ้างเฉลี่ย ไม่เกิน 180 วัน"
+        ],
+        "answerIndex": 1,
+        "timeLimit": 20
+      },
+      {
+        "id": 7,
+        "text": "การได้รับเงินบำนาญชราภาพ (จ่ายรายเดือนตลอดชีวิต) จะต้องจ่ายเงินสมทบครบกี่เดือนขึ้นไป และอายุเท่าใด?",
+        "options": [
+          "ครบ 120 เดือน และอายุ 50 ปีบริบูรณ์",
+          "ครบ 150 เดือน และอายุ 55 ปีบริบูรณ์",
+          "ครบ 180 เดือน และอายุ 55 ปีบริบูรณ์",
+          "ครบ 200 เดือน และอายุ 60 ปีบริบูรณ์"
+        ],
+        "answerIndex": 2,
+        "timeLimit": 20
+      },
+      {
+        "id": 8,
+        "text": "สิทธิเบิกค่าทำฟัน (ถอนฟัน อุดฟัน ขูดหินปูน) ปัจจุบันสามารถใช้สิทธิได้สูงสุดปีละกี่บาทโดยไม่ต้องสำรองจ่าย?",
+        "options": [
+          "600 บาทต่อปี",
+          "900 บาทต่อปี",
+          "1,200 บาทต่อปี",
+          "1,500 บาทต่อปี"
+        ],
+        "answerIndex": 1,
+        "timeLimit": 20
+      },
+      {
+        "id": 9,
+        "text": "ผู้ประกันตนมาตรา 39 (ม.39) คือใคร?",
+        "options": [
+          "ผู้ประกันตนสมัครใจ ที่เคยส่ง ม.33 มาไม่น้อยกว่า 12 เดือน และลาออกไม่เกิน 6 เดือน",
+          "ผู้ประกอบอาชีพอิสระที่สมัครส่งเงินสมทบด้วยตนเองตั้งแต่ต้น",
+          "ลูกจ้างในหน่วยงานราชการหรือวิสาหกิจ",
+          "ผู้สูงอายุที่มีอายุตั้งแต่ 60 ปีขึ้นไป"
+        ],
+        "answerIndex": 0,
+        "timeLimit": 20
+      },
+      {
+        "id": 10,
+        "text": "ผู้ประกันตนมาตรา 40 (ม.40) ทางเลือกที่ 3 (จ่าย 300 บาท/เดือน) จะได้รับเงินบำนาญชราภาพรายเดือนเมื่ออายุเท่าใด?",
+        "options": [
+          "อายุ 55 ปีบริบูรณ์",
+          "อายุ 60 ปีบริบูรณ์",
+          "อายุ 65 ปีบริบูรณ์",
+          "ไม่ได้รับเงินบำนาญ (ได้รับเป็นเงินบำเหน็จก้อนเดียว)"
+        ],
+        "answerIndex": 1,
+        "timeLimit": 20
+      }
+    ];
+
+    // MQTT client configuration
+    let client = null;
+    const brokerHost = "broker.emqx.io";
+    const brokerPort = 8084; // Secure WSS port
+    const brokerPath = "/mqtt";
+
+    window.onload = function() {
+      if (sessionStorage.getItem('host_authenticated') === 'true') {
+        document.getElementById('password-overlay').style.display = 'none';
+        initializePage();
+      }
+    };
+
+    function checkPassword(e) {
+      e.preventDefault();
+      const pass = document.getElementById('input-password').value;
+      if (pass === "ad2026") {
+        sessionStorage.setItem('host_authenticated', 'true');
+        document.getElementById('password-overlay').style.display = 'none';
+        initializePage();
+      } else {
+        document.getElementById('pass-error').style.display = 'block';
+        document.getElementById('input-password').value = "";
+      }
+    }
+
+    function initializePage() {
+      // 1. Generate Game PIN
+      gamePin = Math.floor(100000 + Math.random() * 900000).toString();
+      document.getElementById('lobby-pin').textContent = gamePin;
+
+      // 2. Load questions from localStorage
+      const stored = localStorage.getItem('sso_questions');
+      if (stored) {
+        try {
+          questions = JSON.parse(stored);
+        } catch (e) {
+          questions = defaultQuestions;
+        }
+      } else {
+        questions = defaultQuestions;
+        localStorage.setItem('sso_questions', JSON.stringify(questions));
+      }
+
+      // 3. Generate QR code pointing to static index.html?pin=xxxxxx
+      const protocol = window.location.protocol;
+      const host = window.location.host;
+      let playerUrl = `${protocol}//${host}${window.location.pathname.replace('host.html', 'index.html')}?pin=${gamePin}`;
+      
+      // Fallback if opened as direct file scheme (e.g. file:///...)
+      if (protocol === "file:") {
+        playerUrl = `file://${window.location.pathname.replace('host.html', 'index.html')}?pin=${gamePin}`;
+        document.getElementById('lobby-url').textContent = "เล่นแบบ Local (เปิดไฟล์ index.html)";
+      } else {
+        document.getElementById('lobby-url').textContent = `${protocol}//${host}${window.location.pathname.replace('host.html', '')}`;
+      }
+
+      document.getElementById('qrcode').innerHTML = "";
+      new QRCode(document.getElementById("qrcode"), {
+        text: playerUrl,
+        width: 180,
+        height: 180,
+        colorDark: "#111827",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      // 4. Initialize MQTT Connection
+      connectMQTT();
+
+      // Show lobby page
+      showPage('state-lobby');
+    }
+
+    function connectMQTT() {
+      const clientId = "host_" + Math.floor(Math.random() * 1000000);
+      client = new Paho.MQTT.Client(brokerHost, Number(brokerPort), brokerPath, clientId);
+
+      client.onConnectionLost = onConnectionLost;
+      client.onMessageArrived = onMessageArrived;
+
+      const connectOptions = {
+        onSuccess: onConnectSuccess,
+        onFailure: onConnectFailure,
+        useSSL: true,
+        keepAliveInterval: 60,
+        cleanSession: true
+      };
+
+      client.connect(connectOptions);
+    }
+
+    function onConnectSuccess() {
+      console.log("MQTT connected successfully.");
+      const statusEl = document.getElementById('connection-status');
+      statusEl.className = "badge badge-green";
+      statusEl.textContent = "เชื่อมต่อระบบส่งข้อมูลแล้ว (ออนไลน์)";
+
+      // Subscribe to player channels
+      client.subscribe(`sso-kahoot/${gamePin}/join`);
+      client.subscribe(`sso-kahoot/${gamePin}/submit-answer`);
+
+      // Publish initial state
+      broadcastState();
+    }
+
+    function onConnectFailure(err) {
+      console.error("MQTT connection failed:", err);
+      const statusEl = document.getElementById('connection-status');
+      statusEl.className = "badge badge-red";
+      statusEl.textContent = "การเชื่อมต่อล้มเหลว! กำลังรีทราย...";
+      
+      setTimeout(connectMQTT, 3000); // Retry in 3 seconds
+    }
+
+    function onConnectionLost(responseObject) {
+      if (responseObject.errorCode !== 0) {
+        console.warn("MQTT connection lost:", responseObject.errorMessage);
+        const statusEl = document.getElementById('connection-status');
+        statusEl.className = "badge badge-red";
+        statusEl.textContent = "หลุดการเชื่อมต่อ! กำลังเชื่อมต่อใหม่...";
+        connectMQTT();
+      }
+    }
+
+    function onMessageArrived(message) {
+      const topic = message.destinationName;
+      const payload = JSON.parse(message.payloadString);
+
+      if (topic === `sso-kahoot/${gamePin}/join`) {
+        handlePlayerJoin(payload);
+      } 
+      else if (topic === `sso-kahoot/${gamePin}/submit-answer`) {
+        handleAnswerSubmission(payload);
+      }
+    }
+
+    // Logic: Handle player join request
+    function handlePlayerJoin(payload) {
+      const name = payload.nickname.trim();
+      const playersList = Object.keys(gameState.players);
+      
+      let success = true;
+      let errorMsg = "";
+
+      if (gameState.status !== "lobby") {
+        success = false;
+        errorMsg = "ไม่สามารถเข้าร่วมได้เนื่องจากเกมเริ่มไปแล้ว";
+      } else if (playersList.length >= 200) {
+        success = false;
+        errorMsg = "ห้องเล่นเกมเต็มแล้ว (จำกัด 200 คน)";
+      } else if (gameState.players[name]) {
+        success = false;
+        errorMsg = "ชื่อเล่นนี้มีคนใช้แล้ว กรุณาเลือกชื่อเล่นอื่น";
+      }
+
+      if (success) {
+        gameState.players[name] = {
+          nickname: name,
+          score: 0,
+          lastAnswerIndex: -1,
+          lastAnswerTime: 0,
+          lastAnswerCorrect: false,
+          streak: 0,
+          correctCount: 0
+        };
+        console.log(`Player joined: ${name}`);
+        
+        // Send success feedback to specific player
+        sendMqttMessage(`sso-kahoot/${gamePin}/player/${name}/join-confirm`, { success: true });
+        
+        // Refresh grid
+        renderLobbyPlayers();
+        broadcastState();
+      } else {
+        // Send error feedback
+        sendMqttMessage(`sso-kahoot/${gamePin}/player/${name}/join-confirm`, { success: false, message: errorMsg });
+      }
+    }
+
+    // Logic: Handle answer submission from a player
+    function handleAnswerSubmission(payload) {
+      const { nickname, questionIndex, answerIndex } = payload;
+      const player = gameState.players[nickname];
+
+      if (!player || gameState.status !== "question" || questionIndex !== gameState.currentQuestionIndex) {
+        return; // Answer ignored (not in question state or wrong index)
+      }
+
+      if (player.lastAnswerIndex !== -1) {
+        return; // Already answered
+      }
+
+      const q = questions[gameState.currentQuestionIndex];
+      const elapsed = (Date.now() - gameState.questionStartTime) / 1000;
+
+      if (elapsed > q.timeLimit) {
+        return; // Time expired
+      }
+
+      player.lastAnswerIndex = answerIndex;
+      player.lastAnswerTime = elapsed;
+      gameState.answersCount++;
+      gameState.choiceCounts[answerIndex]++;
+
+      // Calculate score
+      const isCorrect = (answerIndex === q.answerIndex);
+      let pointsEarned = 0;
+
+      if (isCorrect) {
+        const ratio = elapsed / q.timeLimit;
+        let speedFactor = 1.0 - (ratio / 2.0); // Kahoot formula: between 0.5 and 1.0
+        if (speedFactor < 0.5) speedFactor = 0.5;
+        if (speedFactor > 1.0) speedFactor = 1.0;
+
+        pointsEarned = Math.round(1000 * speedFactor);
+        player.score += pointsEarned;
+        player.lastAnswerCorrect = true;
+        player.streak++;
+        player.correctCount++;
+      } else {
+        player.lastAnswerCorrect = false;
+        player.streak = 0;
+      }
+
+      // 1. Send private immediate feedback to the player
+      sendMqttMessage(`sso-kahoot/${gamePin}/player/${nickname}/feedback`, {
+        success: true,
+        correct: isCorrect,
+        pointsEarned: pointsEarned,
+        newScore: player.score,
+        streak: player.streak
+      });
+
+      // 2. Update screen answers count
+      document.getElementById('q-answers-submitted').textContent = gameState.answersCount;
+
+      // 3. Broadcast state so players get answers count sync
+      broadcastState();
+
+      // If all players answered, trigger auto reveal
+      const totalPlayers = Object.keys(gameState.players).length;
+      if (gameState.answersCount === totalPlayers && totalPlayers > 0) {
+        revealAnswer();
+      }
+    }
+
+    // Helper: publish MQTT JSON message
+    function sendMqttMessage(topic, payload) {
+      if (client && client.isConnected()) {
+        const msg = new Paho.MQTT.Message(JSON.stringify(payload));
+        msg.destinationName = topic;
+        client.send(msg);
+      }
+    }
+
+    // Helper: Broadcast game state to all players
+    function broadcastState() {
+      const activePlayers = Object.keys(gameState.players);
+      
+      const payload = {
+        status: gameState.status,
+        currentQuestionIndex: gameState.currentQuestionIndex,
+        totalPlayers: activePlayers.length,
+        answersCount: gameState.answersCount,
+      };
+
+      if (gameState.status === "question" && gameState.currentQuestionIndex >= 0 && gameState.currentQuestionIndex < questions.length) {
+        const q = questions[gameState.currentQuestionIndex];
+        payload.question = {
+          id: q.id,
+          text: q.text,
+          options: q.options,
+          timeLimit: q.timeLimit,
+          timeRemaining: gameState.timeRemaining
+        };
+      }
+
+      if (gameState.status === "reveal" && gameState.currentQuestionIndex >= 0 && gameState.currentQuestionIndex < questions.length) {
+        const q = questions[gameState.currentQuestionIndex];
+        payload.reveal = {
+          correctAnswerIndex: q.answerIndex,
+          correctOptionText: q.options[q.answerIndex]
+        };
+      }
+
+      // Add leaderboard positioning mapping so players can get their rankings
+      const ranking = Object.values(gameState.players)
+        .sort((a, b) => b.score - a.score || a.nickname.localeCompare(b.nickname));
+
+      // We publish player scores individually or build a rank index. 
+      // For simplicity, we include the rank map in the broadcast:
+      // nickname -> { rank, score }
+      const playerRankMap = {};
+      ranking.forEach((p, idx) => {
+        playerRankMap[p.nickname] = {
+          rank: idx + 1,
+          score: p.score,
+          lastAnswerIndex: p.lastAnswerIndex,
+          lastAnswerCorrect: p.lastAnswerCorrect,
+          streak: p.streak,
+          correctCount: p.correctCount
+        };
+      });
+      payload.playerRankMap = playerRankMap;
+
+      sendMqttMessage(`sso-kahoot/${gamePin}/state`, payload);
+    }
+
+    // Timer loop functions
+    let timerInterval = null;
+    function startLocalTimer(secs) {
+      clearInterval(timerInterval);
+      gameState.timeRemaining = secs;
+      document.getElementById('timer-sec-val').textContent = secs;
+
+      timerInterval = setInterval(() => {
+        gameState.timeRemaining--;
+        if (gameState.timeRemaining < 0) {
+          gameState.timeRemaining = 0;
+        }
+
+        document.getElementById('timer-sec-val').textContent = gameState.timeRemaining;
+        
+        // Periodically broadcast timer remaining
+        broadcastState();
+
+        if (gameState.timeRemaining === 0) {
+          clearInterval(timerInterval);
+          revealAnswer();
+        }
+      }, 1000);
+    }
+
+    function stopLocalTimer() {
+      clearInterval(timerInterval);
+    }
+
+    function renderLobbyPlayers() {
+      const activePlayers = Object.keys(gameState.players);
+      document.getElementById('lobby-players-count').textContent = activePlayers.length;
+      document.getElementById('start-game-btn').disabled = (activePlayers.length === 0);
+
+      const grid = document.getElementById('lobby-players-grid');
+      grid.innerHTML = "";
+      activePlayers.forEach(pname => {
+        const tag = document.createElement('div');
+        tag.className = 'player-tag';
+        tag.textContent = pname;
+        grid.appendChild(tag);
+      });
+    }
+
+    // State Page Controller
+    function showPage(pageId) {
+      const pages = ['state-lobby', 'state-question', 'state-leaderboard', 'state-podium'];
+      pages.forEach(p => {
+        document.getElementById(p).style.display = (p === pageId) ? (p === 'state-lobby' ? 'grid' : 'flex') : 'none';
+      });
+    }
+
+    // Host Actions
+    function startGame() {
+      if (questions.length === 0) {
+        alert("ไม่มีคำถามในระบบ กรุณาคลิก 'จัดการคำถาม' เพื่อเพิ่มคำถาม");
+        return;
+      }
+      
+      gameState.status = "question";
+      gameState.currentQuestionIndex = 0;
+      resetPlayerAnsweringStatus();
+      gameState.questionStartTime = Date.now();
+      
+      syncQuestionUI();
+      startLocalTimer(questions[0].timeLimit);
+      broadcastState();
+    }
+
+    function syncQuestionUI() {
+      showPage('state-question');
+      const q = questions[gameState.currentQuestionIndex];
+      
+      document.getElementById('q-index-val').textContent = (gameState.currentQuestionIndex + 1) + " จาก " + questions.length;
+      document.getElementById('q-text-val').textContent = q.text;
+      document.getElementById('q-answers-submitted').textContent = "0";
+      document.getElementById('q-total-players').textContent = Object.keys(gameState.players).length;
+
+      for (let i = 0; i < 4; i++) {
+        document.getElementById(`choice-text-${i}`).textContent = q.options[i];
+        const card = document.getElementById(`choice-card-${i}`);
+        card.className = `host-choice-card ${getChoiceColorClass(i)}`;
+      }
+
+      document.getElementById('answers-chart').style.visibility = 'hidden';
+      document.getElementById('skip-btn').style.display = 'inline-flex';
+      document.getElementById('next-btn').style.display = 'none';
+    }
+
+    function resetPlayerAnsweringStatus() {
+      gameState.answersCount = 0;
+      gameState.choiceCounts = [0, 0, 0, 0];
+      for (let key in gameState.players) {
+        gameState.players[key].lastAnswerIndex = -1;
+        gameState.players[key].lastAnswerCorrect = false;
+        gameState.players[key].lastAnswerTime = 0;
+      }
+    }
+
+    function revealAnswer() {
+      stopLocalTimer();
+      gameState.status = "reveal";
+      document.getElementById('skip-btn').style.display = 'none';
+      document.getElementById('next-btn').style.display = 'inline-flex';
+      
+      document.getElementById('answers-chart').style.visibility = 'visible';
+      
+      const counts = gameState.choiceCounts;
+      const total = counts.reduce((a,b) => a+b, 0);
+      const maxVal = Math.max(...counts, 1);
+      const q = questions[gameState.currentQuestionIndex];
+      
+      for (let i = 0; i < 4; i++) {
+        const count = counts[i];
+        const percent = total > 0 ? (count / maxVal) * 80 + 10 : 10;
+        
+        const bar = document.getElementById(`chart-bar-${i}`);
+        bar.style.height = `${percent}%`;
+        document.getElementById(`chart-val-${i}`).textContent = count;
+        
+        const card = document.getElementById(`choice-card-${i}`);
+        const isCorrect = (i === q.answerIndex);
+        card.className = `host-choice-card ${getChoiceColorClass(i)} ${isCorrect ? 'reveal-correct' : 'reveal-dim'}`;
+      }
+
+      broadcastState();
+    }
+
+    function showLeaderboard() {
+      gameState.status = "leaderboard";
+      showPage('state-leaderboard');
+
+      const isLast = (gameState.currentQuestionIndex + 1 >= questions.length);
+      const nextBtn = document.getElementById('leaderboard-next-btn');
+      if (isLast) {
+        nextBtn.innerHTML = `
+          ผลลัพธ์รอบชิง (Podium)
+          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>
+        `;
+        nextBtn.onclick = showPodium;
+      } else {
+        nextBtn.innerHTML = `
+          คำถามข้อถัดไป
+          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        `;
+        nextBtn.onclick = nextQuestion;
+      }
+
+      const ranking = Object.values(gameState.players)
+        .sort((a, b) => b.score - a.score || a.nickname.localeCompare(b.nickname));
+
+      const listGrid = document.getElementById('leaderboard-list-grid');
+      listGrid.innerHTML = "";
+      
+      if (ranking.length === 0) {
+        listGrid.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 20px;">ยังไม่มีผู้เล่นได้รับคะแนน</div>`;
+      } else {
+        ranking.slice(0, 10).forEach((p, idx) => {
+          const item = document.createElement('div');
+          item.className = 'leaderboard-item';
+          
+          const streakHtml = p.streak >= 3 
+            ? `<span class="leaderboard-streak">🔥 ${p.streak} ข้อติด!</span>` 
+            : "";
+            
+          item.innerHTML = `
+            <div class="leaderboard-rank-name">
+              <span class="leaderboard-rank">${idx + 1}</span>
+              <span class="leaderboard-name">${escapeHtml(p.nickname)}</span>
+            </div>
+            <div class="leaderboard-score-streak">
+              ${streakHtml}
+              <span class="leaderboard-score">${p.score}</span>
+            </div>
+          `;
+          listGrid.appendChild(item);
+        });
+      }
+
+      broadcastState();
+    }
+
+    function nextQuestion() {
+      if (gameState.currentQuestionIndex + 1 < questions.length) {
+        gameState.currentQuestionIndex++;
+        gameState.status = "question";
+        resetPlayerAnsweringStatus();
+        gameState.questionStartTime = Date.now();
+        
+        syncQuestionUI();
+        startLocalTimer(questions[gameState.currentQuestionIndex].timeLimit);
+        broadcastState();
+      }
+    }
+
+    function showPodium() {
+      gameState.status = "podium";
+      showPage('state-podium');
+
+      const ranking = Object.values(gameState.players)
+        .sort((a, b) => b.score - a.score || a.nickname.localeCompare(b.nickname));
+
+      // Render podium
+      // 1st Place
+      if (ranking.length >= 1) {
+        document.getElementById('podium-name-1').textContent = ranking[0].nickname;
+        document.getElementById('podium-score-1').textContent = ranking[0].score + " คะแนน";
+        document.getElementById('podium-1st').style.visibility = 'visible';
+      } else {
+        document.getElementById('podium-1st').style.visibility = 'hidden';
+      }
+      
+      // 2nd Place
+      if (ranking.length >= 2) {
+        document.getElementById('podium-name-2').textContent = ranking[1].nickname;
+        document.getElementById('podium-score-2').textContent = ranking[1].score + " คะแนน";
+        document.getElementById('podium-2nd').style.visibility = 'visible';
+      } else {
+        document.getElementById('podium-2nd').style.visibility = 'hidden';
+      }
+
+      // 3rd Place
+      if (ranking.length >= 3) {
+        document.getElementById('podium-name-3').textContent = ranking[2].nickname;
+        document.getElementById('podium-score-3').textContent = ranking[2].score + " คะแนน";
+        document.getElementById('podium-3rd').style.visibility = 'visible';
+      } else {
+        document.getElementById('podium-3rd').style.visibility = 'hidden';
+      }
+
+      startConfetti();
+      broadcastState();
+    }
+
+    function resetGame() {
+      if (confirm("คุณแน่ใจหรือไม่ว่าต้องการจะล้างคะแนนและรีเซ็ตเซสชันเกมทั้งหมด?")) {
+        stopConfetti();
+        stopLocalTimer();
+        
+        // Reset state values
+        gameState = {
+          status: "lobby",
+          currentQuestionIndex: -1,
+          players: {},
+          choiceCounts: [0, 0, 0, 0],
+          answersCount: 0,
+          timeRemaining: 20,
+          questionStartTime: 0
+        };
+
+        // Render Lobby again
+        renderLobbyPlayers();
+        showPage('state-lobby');
+        
+        // Broadcast reset to players
+        broadcastState();
+      }
+    }
+
+    function getChoiceColorClass(idx) {
+      const colors = ['red', 'blue', 'yellow', 'green'];
+      return colors[idx];
+    }
+
+    // Confetti logic
+    let confettiTimer = null;
+    function startConfetti() {
+      const container = document.getElementById('confetti-container');
+      container.innerHTML = "";
+      
+      confettiTimer = setInterval(() => {
+        const colors = ['#f43f5e', '#3b82f6', '#eab308', '#10b981', '#a855f7', '#ff7849'];
+        const conf = document.createElement('div');
+        conf.className = 'confetti';
+        conf.style.left = Math.random() * 100 + 'vw';
+        conf.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        conf.style.width = Math.random() * 8 + 6 + 'px';
+        conf.style.height = conf.style.width;
+        conf.style.animationDuration = Math.random() * 2 + 2.5 + 's';
+        
+        container.appendChild(conf);
+        
+        // clean up after falling
+        setTimeout(() => conf.remove(), 4000);
+      }, 70);
+    }
+
+    function stopConfetti() {
+      if (confettiTimer) {
+        clearInterval(confettiTimer);
+        confettiTimer = null;
+      }
+      document.getElementById('confetti-container').innerHTML = "";
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>
