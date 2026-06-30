@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ร่วมเล่นเกม | SSO Quiz Game Player</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Paho MQTT WebSockets Client -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <style>
+    /* Prevent double-tap zoom on mobile devices */
+    touch-action: manipulation;
+  </style>
+</head>
+<body>
+  
+  <div class="player-container">
+    
+    <!-- View: Login (Join Game) -->
+    <div id="view-login" class="glass-panel" style="display: block;">
+      <h2 style="text-align: center; margin-bottom: 25px; font-size: 1.8rem; background: linear-gradient(135deg, #a78bfa 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+        SSO Quiz Game
+      </h2>
+      
+      <div id="login-error" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #fc8181; padding: 12px; border-radius: 10px; margin-bottom: 20px; font-size: 0.9rem; text-align: center; display: none;">
+        เกิดข้อผิดพลาด
+      </div>
+
+      <form onsubmit="joinGame(event)">
+        <div class="form-group">
+          <label for="input-pin">GAME PIN</label>
+          <input type="number" id="input-pin" class="form-control" placeholder="ระบุ PIN 6 หลัก" required style="font-family: 'Outfit'; font-size: 1.5rem; text-align: center; letter-spacing: 5px;">
+        </div>
+        
+        <div class="form-group">
+          <label for="input-name">ชื่อเล่นของคุณ (Nickname)</label>
+          <input type="text" id="input-name" class="form-control" placeholder="เช่น สมชาย, Aey (สูงสุด 15 ตัวอักษร)" maxlength="15" required style="font-size: 1.1rem; text-align: center;">
+        </div>
+
+        <button type="submit" id="join-btn" class="btn btn-primary" style="width: 100%; padding: 15px; margin-top: 10px; font-size: 1.1rem;">
+          เข้าร่วมเล่นเกม
+        </button>
+      </form>
+    </div>
+
+    <!-- View: Lobby (Waiting for host to start) -->
+    <div id="view-lobby" class="glass-panel player-lobby-content" style="display: none;">
+      <div class="glowing-circle">🎮</div>
+      <h2>คุณอยู่ในเกมแล้ว!</h2>
+      <div class="player-nickname-display" id="lobby-display-name">Nickname</div>
+      <p class="player-lobby-status">กรุณารอดูชื่อของคุณบนหน้าจอหลัก<br>และรอผู้จัดเริ่มการแข่งขัน...</p>
+      <div style="font-size: 0.85rem; color: var(--text-muted);">
+        รหัส PIN เกม: <strong id="lobby-display-pin" style="color: white; font-family: 'Outfit';">------</strong>
+      </div>
+    </div>
+
+    <!-- View: Question Answering (tactile color shapes) -->
+    <div id="view-answering" style="display: none; flex-direction: column; width: 100%; height: 100%;">
+      <div style="text-align: center; margin-bottom: 15px; font-family: 'Outfit'; font-weight: bold; color: var(--text-muted);">
+        คำถามข้อที่ <span id="answering-q-index">0</span>
+      </div>
+      
+      <div class="player-choices-grid">
+        <button class="player-choice-btn red" onclick="submitAnswer(0)">
+          <span class="choice-shape-icon">▲</span>
+          <span class="choice-label">สีแดง</span>
+        </button>
+        <button class="player-choice-btn blue" onclick="submitAnswer(1)">
+          <span class="choice-shape-icon">◆</span>
+          <span class="choice-label">สีน้ำเงิน</span>
+        </button>
+        <button class="player-choice-btn yellow" onclick="submitAnswer(2)">
+          <span class="choice-shape-icon">●</span>
+          <span class="choice-label">สีเหลือง</span>
+        </button>
+        <button class="player-choice-btn green" onclick="submitAnswer(3)">
+          <span class="choice-shape-icon">■</span>
+          <span class="choice-label">สีเขียว</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- View: Waiting (after answering) -->
+    <div id="view-waiting" class="glass-panel player-lobby-content" style="display: none;">
+      <div class="glowing-circle" style="background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%); box-shadow: 0 0 30px rgba(59, 130, 246, 0.4);">⌛</div>
+      <h2>ส่งคำตอบแล้ว!</h2>
+      <p class="player-lobby-status" style="margin-top: 15px;">รอผู้เล่นอื่นตอบคำถาม หรือหมดเวลา...</p>
+    </div>
+
+    <!-- View: Feedback Correct -->
+    <div id="view-correct" class="feedback-container correct" style="display: none;">
+      <div class="feedback-icon">✓</div>
+      <div class="feedback-title">ถูกต้อง!</div>
+      <div class="points-reveal" id="correct-points-val">+950 คะแนน</div>
+      
+      <div class="player-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">คะแนนรวม</span>
+          <span class="stat-value" id="correct-total-score">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">อันดับ</span>
+          <span class="stat-value" id="correct-rank">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">การตอบถูกติดกัน</span>
+          <span class="stat-value" id="correct-streak">🔥 0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Feedback Incorrect -->
+    <div id="view-incorrect" class="feedback-container incorrect" style="display: none;">
+      <div class="feedback-icon">✗</div>
+      <div class="feedback-title">ไม่ถูกต้อง!</div>
+      <p style="color: var(--text-muted); margin: 5px 0 15px 0; font-size: 0.95rem;">
+        สู้ๆ ข้อต่อไปยังแก้ตัวได้!
+      </p>
+      <div style="background: rgba(0, 0, 0, 0.2); padding: 10px; border-radius: 8px; font-size: 0.9rem; margin-bottom: 20px; line-height: 1.4;">
+        คำตอบที่ถูกคือ: <strong id="incorrect-correct-ans" style="color: #34d399;">-</strong>
+      </div>
+      
+      <div class="player-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">คะแนนรวม</span>
+          <span class="stat-value" id="incorrect-total-score">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">อันดับ</span>
+          <span class="stat-value" id="incorrect-rank">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Feedback Time's Up -->
+    <div id="view-timeup" class="feedback-container time-up" style="display: none;">
+      <div class="feedback-icon">⏳</div>
+      <div class="feedback-title">หมดเวลา!</div>
+      <p style="color: var(--text-muted); margin: 5px 0 20px 0; font-size: 0.95rem;">
+        คุณไม่ได้ตอบคำถามข้อนี้ภายในเวลา
+      </p>
+      
+      <div class="player-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">คะแนนรวม</span>
+          <span class="stat-value" id="timeup-total-score">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">อันดับ</span>
+          <span class="stat-value" id="timeup-rank">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Leaderboard Screen Waiting -->
+    <div id="view-leaderboard" class="glass-panel player-lobby-content" style="display: none;">
+      <div class="glowing-circle" style="background: linear-gradient(135deg, #a78bfa 0%, #c084fc 100%); box-shadow: 0 0 30px rgba(167, 139, 250, 0.4);">📊</div>
+      <h2>สรุปผลประจำข้อ</h2>
+      <p class="player-lobby-status" style="margin-top: 15px;">กรุณาดูตารางอันดับบนหน้าจอหลัก</p>
+      <div class="player-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">คะแนนรวม</span>
+          <span class="stat-value" id="board-total-score">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">อันดับ</span>
+          <span class="stat-value" id="board-rank">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Final Podium/Game Over -->
+    <div id="view-podium" class="glass-panel player-lobby-content" style="display: none;">
+      <div class="glowing-circle" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); box-shadow: 0 0 40px rgba(245, 158, 11, 0.6);" id="final-badge-icon">👑</div>
+      <h2 id="final-title">จบการแข่งขัน!</h2>
+      <p class="player-lobby-status" id="final-subtitle" style="margin-top: 15px;"></p>
+      
+      <div class="player-stats-bar">
+        <div class="stat-item">
+          <span class="stat-label">คะแนนสุดท้าย</span>
+          <span class="stat-value" id="final-total-score">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">อันดับรวม</span>
+          <span class="stat-value" id="final-rank">0</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Connection variables
+    let gamePin = "";
+    let nickname = "";
+    let currentQuestionIndex = -1;
+    let hasAnsweredCurrent = false;
+
+    // MQTT variables
+    let client = null;
+    const brokerHost = "broker.emqx.io";
+    const brokerPort = 8084;
+    const brokerPath = "/mqtt";
+
+    // Player stats locally tracked from sync
+    let lastFeedback = null;
+
+    window.onload = function() {
+      // Auto-fill PIN from URL query string if present
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlPin = urlParams.get('pin');
+      if (urlPin) {
+        document.getElementById('input-pin').value = urlPin;
+      }
+    };
+
+    function joinGame(e) {
+      e.preventDefault();
+      
+      const pin = document.getElementById('input-pin').value.trim();
+      const name = document.getElementById('input-name').value.trim();
+      const errBox = document.getElementById('login-error');
+      const joinBtn = document.getElementById('join-btn');
+      
+      errBox.style.display = 'none';
+      joinBtn.disabled = true;
+      joinBtn.textContent = "กำลังเชื่อมต่อระบบ...";
+
+      // Setup MQTT
+      gamePin = pin;
+      nickname = name;
+      
+      const clientId = "player_" + Math.floor(Math.random() * 1000000);
+      client = new Paho.MQTT.Client(brokerHost, Number(brokerPort), brokerPath, clientId);
+
+      client.onConnectionLost = onConnectionLost;
+      client.onMessageArrived = onMessageArrived;
+
+      const connectOptions = {
+        onSuccess: onConnectSuccess,
+        onFailure: onConnectFailure,
+        useSSL: true,
+        keepAliveInterval: 60,
+        cleanSession: true
+      };
+
+      client.connect(connectOptions);
+    }
+
+    function onConnectSuccess() {
+      console.log("MQTT connected.");
+      
+      // Subscribe to personal confirmation channels
+      client.subscribe(`sso-kahoot/${gamePin}/player/${nickname}/join-confirm`);
+      client.subscribe(`sso-kahoot/${gamePin}/player/${nickname}/feedback`);
+      
+      // Send join request to host
+      sendMqttMessage(`sso-kahoot/${gamePin}/join`, { nickname });
+    }
+
+    function onConnectFailure(err) {
+      console.error("MQTT connect failure:", err);
+      resetLoginButton("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ระบบส่งข้อมูลได้");
+    }
+
+    function onConnectionLost(responseObject) {
+      if (responseObject.errorCode !== 0) {
+        console.warn("Player connection lost:", responseObject.errorMessage);
+        alert("หลุดการเชื่อมต่อจากเซิร์ฟเวอร์เกม กำลังพยายามเชื่อมต่อใหม่...");
+        window.location.reload();
+      }
+    }
+
+    function onMessageArrived(message) {
+      const topic = message.destinationName;
+      const payload = JSON.parse(message.payloadString);
+
+      // Topic 1: Join Confirmation from Host
+      if (topic === `sso-kahoot/${gamePin}/player/${nickname}/join-confirm`) {
+        if (payload.success) {
+          // Join approved!
+          document.getElementById('lobby-display-name').textContent = nickname;
+          document.getElementById('lobby-display-pin').textContent = gamePin;
+          
+          showView('view-lobby');
+          
+          // Subscribe to global game state channels
+          client.subscribe(`sso-kahoot/${gamePin}/state`);
+        } else {
+          // Join rejected!
+          client.disconnect();
+          resetLoginButton(payload.message);
+        }
+      }
+      
+      // Topic 2: Score Feedback from Host (sent immediately after answering)
+      else if (topic === `sso-kahoot/${gamePin}/player/${nickname}/feedback`) {
+        if (payload.success) {
+          lastFeedback = payload;
+          // Note: don't reveal feedback immediately, hold it until Host states transition to 'reveal'
+        }
+      }
+
+      // Topic 3: Global Game State Updates from Host
+      else if (topic === `sso-kahoot/${gamePin}/state`) {
+        syncPlayerState(payload);
+      }
+    }
+
+    function resetLoginButton(errorMsg) {
+      const errBox = document.getElementById('login-error');
+      const joinBtn = document.getElementById('join-btn');
+      
+      errBox.textContent = errorMsg;
+      errBox.style.display = 'block';
+      joinBtn.disabled = false;
+      joinBtn.textContent = "เข้าร่วมเล่นเกม";
+    }
+
+    function syncPlayerState(data) {
+      const state = data.status;
+      
+      // Read current rank mapping from broadcast
+      const pMap = data.playerRankMap ? data.playerRankMap[nickname] : null;
+
+      if (state === "lobby") {
+        showView('view-lobby');
+        hasAnsweredCurrent = false;
+        lastFeedback = null;
+      } 
+      
+      else if (state === "question") {
+        if (data.currentQuestionIndex !== currentQuestionIndex) {
+          currentQuestionIndex = data.currentQuestionIndex;
+          hasAnsweredCurrent = false;
+          lastFeedback = null;
+        }
+
+        if (hasAnsweredCurrent) {
+          showView('view-waiting');
+        } else {
+          showView('view-answering');
+          document.getElementById('answering-q-index').textContent = (currentQuestionIndex + 1);
+        }
+      } 
+      
+      else if (state === "reveal") {
+        if (!pMap) return;
+
+        // If player didn't answer (lastAnswerIndex remains -1) or feedback is missing
+        if (pMap.lastAnswerIndex === -1) {
+          showView('view-timeup');
+          document.getElementById('timeup-total-score').textContent = pMap.score;
+          document.getElementById('timeup-rank').textContent = pMap.rank;
+        } 
+        else if (pMap.lastAnswerCorrect) {
+          showView('view-correct');
+          
+          // Show correct points earned
+          const earned = lastFeedback ? lastFeedback.pointsEarned : 0;
+          document.getElementById('correct-points-val').textContent = "+" + earned + " คะแนน";
+          
+          document.getElementById('correct-total-score').textContent = pMap.score;
+          document.getElementById('correct-rank').textContent = pMap.rank;
+          document.getElementById('correct-streak').textContent = "🔥 " + pMap.streak;
+        } 
+        else {
+          showView('view-incorrect');
+          document.getElementById('incorrect-total-score').textContent = pMap.score;
+          document.getElementById('incorrect-rank').textContent = pMap.rank;
+          
+          if (data.reveal) {
+            const labels = ['สีแดง (A)', 'สีน้ำเงิน (B)', 'สีเหลือง (C)', 'สีเขียว (D)'];
+            document.getElementById('incorrect-correct-ans').textContent = labels[data.reveal.correctAnswerIndex] + " - " + data.reveal.correctOptionText;
+          }
+        }
+      } 
+      
+      else if (state === "leaderboard") {
+        if (pMap) {
+          showView('view-leaderboard');
+          document.getElementById('board-total-score').textContent = pMap.score;
+          document.getElementById('board-rank').textContent = pMap.rank;
+        }
+      } 
+      
+      else if (state === "podium") {
+        if (pMap) {
+          showView('view-podium');
+          document.getElementById('final-total-score').textContent = pMap.score;
+          document.getElementById('final-rank').textContent = pMap.rank;
+          
+          const rank = pMap.rank;
+          const finalTitle = document.getElementById('final-title');
+          const finalSubtitle = document.getElementById('final-subtitle');
+          const finalBadge = document.getElementById('final-badge-icon');
+
+          if (rank === 1) {
+            finalTitle.textContent = "🏆 ชนะเลิศอันดับ 1! 🏆";
+            finalSubtitle.textContent = "สุดยอดไปเลย! คุณมีความรู้เรื่องประกันสังคมยอดเยี่ยมที่สุด!";
+            finalBadge.textContent = "👑";
+            finalBadge.style.background = "linear-gradient(135deg, #ffd700 0%, #d97706 100%)";
+          } else if (rank === 2) {
+            finalTitle.textContent = "🥈 รองชนะเลิศอันดับ 1 🥈";
+            finalSubtitle.textContent = "เก่งมาก! คุณตอบได้ถูกต้องและรวดเร็วเกือบเป็นอันดับหนึ่ง!";
+            finalBadge.textContent = "🥈";
+            finalBadge.style.background = "linear-gradient(135deg, #e5e7eb 0%, #9ca3af 100%)";
+          } else if (rank === 3) {
+            finalTitle.textContent = "🥉 รองชนะเลิศอันดับ 2 🥉";
+            finalSubtitle.textContent = "ยอดเยี่ยม! คุณตอบคำถามได้ถูกต้องรวดเร็วจนติด 3 อันดับแรก!";
+            finalBadge.textContent = "🥉";
+            finalBadge.style.background = "linear-gradient(135deg, #d97706 0%, #b45309 100%)";
+          } else {
+            finalTitle.textContent = "จบการแข่งขัน";
+            finalSubtitle.textContent = `คุณทำคะแนนได้ดีมากและผ่านการอบรมประกันสังคมเรียบร้อยแล้ว`;
+            finalBadge.textContent = "👏";
+            finalBadge.style.background = "linear-gradient(135deg, #6366f1 0%, #a78bfa 100%)";
+          }
+        }
+      }
+    }
+
+    function submitAnswer(idx) {
+      if (hasAnsweredCurrent) return;
+      
+      hasAnsweredCurrent = true;
+      showView('view-waiting');
+
+      sendMqttMessage(`sso-kahoot/${gamePin}/submit-answer`, {
+        nickname: nickname,
+        questionIndex: currentQuestionIndex,
+        answerIndex: idx
+      });
+    }
+
+    function sendMqttMessage(topic, payload) {
+      if (client && client.isConnected()) {
+        const msg = new Paho.MQTT.Message(JSON.stringify(payload));
+        msg.destinationName = topic;
+        client.send(msg);
+      }
+    }
+
+    function showView(viewId) {
+      const views = ['view-login', 'view-lobby', 'view-answering', 'view-waiting', 'view-correct', 'view-incorrect', 'view-timeup', 'view-leaderboard', 'view-podium'];
+      views.forEach(v => {
+        const el = document.getElementById(v);
+        el.style.display = (v === viewId) ? (v === 'view-answering' ? 'flex' : 'block') : 'none';
+      });
+    }
+  </script>
+</body>
+</html>
